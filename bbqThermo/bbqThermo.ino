@@ -23,6 +23,9 @@ Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
 #define THERMOMETER_PROBE_PIN 3
 #define FAN_PIN 7
+#define ENCODER_A_PIN 2
+#define ENCODER_B_PIN 3
+#define ENCODER_PUSH_PIN 8
 
 #define STEINHART_0 5.36924e-4
 #define STEINHART_1 1.91396e-4
@@ -30,10 +33,18 @@ Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 #define STEINHART_3 9.87e+3
 
 #define ADCmax 1023.0f
-//#define minTemp 210.0f
-//#define maxTemp 220.0f
-#define minTemp 310.0f
-#define maxTemp 320.0f
+
+// interrupt service routine vars
+volatile unsigned int newTemperature = 255;         // a counter for the dial
+unsigned int currentTemperature = newTemperature;   // change management
+static boolean rotating = false;                    // debounce management
+boolean A_set = false;              
+boolean B_set = false;
+volatile unsigned long lastInterruptTime;
+volatile boolean interruptTriggered = false;
+
+
+unsigned long lastTempCheck;
 
 
 float computeTemp(int probeVal)
@@ -98,8 +109,58 @@ boolean initSD() {
   
   Serial.print("Successfully opened file on SD card: ");
   Serial.println(filename);
-  #endif
+#endif
   return true;
+}
+
+
+// Interrupt on A changing state
+void doEncoderA() {
+  interruptTriggered = true;
+  
+  // debounce
+  // wait a little until the bouncing is done
+  if (rotating) {
+    delay (1);  
+  }
+
+  // Test transition, did things really change? 
+  if (digitalRead(ENCODER_A_PIN) != A_set) {  // debounce once more
+    A_set = !A_set;
+
+    // adjust counter + if A leads B
+    if (A_set && !B_set)
+      if (newTemperature < 500) {
+        newTemperature += 5;
+      }
+
+    rotating = false;  // no more debouncing until loop() hits again
+  
+    lastInterruptTime = millis();
+  }
+}
+
+// Interrupt on B changing state, same as A above
+void doEncoderB() {
+  interruptTriggered = true;
+  
+  if ( rotating ) {
+    delay (1);
+  }
+  
+  if (digitalRead(ENCODER_B_PIN) != B_set) {
+    B_set = !B_set;
+    //  adjust counter - 1 if B leads A
+    if (B_set && !A_set) {
+      if (newTemperature > 5) {
+        newTemperature -= 5;
+      }
+    }
+
+    rotating = false;
+  
+    lastInterruptTime = millis();
+  }
 }
 
 
@@ -118,28 +179,27 @@ void setup() {
 
   pinMode(FAN_PIN, OUTPUT);
 
+
+  pinMode(ENCODER_A_PIN, INPUT); 
+  pinMode(ENCODER_B_PIN, INPUT); 
+  pinMode(ENCODER_PUSH_PIN, INPUT);
+ // turn on pullup resistors
+  digitalWrite(ENCODER_A_PIN, HIGH);
+  digitalWrite(ENCODER_B_PIN, HIGH);
+  digitalWrite(ENCODER_PUSH_PIN, HIGH);
+  
+// encoder pin on interrupt 0 (pin 2)
+  attachInterrupt(0, doEncoderA, CHANGE);
+// encoder pin on interrupt 1 (pin 3)
+  attachInterrupt(1, doEncoderB, CHANGE);
+
   Serial.println("Running...");
+
+  lastTempCheck = millis();
 }
 
 
-void loop() {
-  // put your main code here, to run repeatedly:
-
-  int16_t probeVal = analogRead(THERMOMETER_PROBE_PIN);    // read the input pin
-
-  float temp = computeTemp(probeVal);
-
-  Serial.println(temp);
-
-  if (temp > maxTemp)
-  {
-    setFan(false);
-  }
-  else if (temp < minTemp)
-  {
-    setFan(true);
-  }
-
+void displayTemperature(unsigned int temp) {  
   display.clearDisplay();
   display.setCursor(0, 0);
   int roundTemp = int(temp + 0.5);
@@ -154,15 +214,97 @@ void loop() {
     display.print((char)247);
   }
   display.display();
+}
+
+
+void loop() {
+  interruptTriggered = false;
+  rotating = true;  // reset the debouncer
+
+  // Sample the temperature every 5 seconds
+  if (millis() - lastTempCheck > 5000) {
+    lastTempCheck += 5000;
+    
+    int16_t probeVal = analogRead(THERMOMETER_PROBE_PIN);    // read the input pin
   
+    float temp = computeTemp(probeVal);
+  
+    Serial.println(temp);
+  
+    if (temp > (currentTemperature - 15))
+    {
+      setFan(false);
+    }
+    else if (temp < (currentTemperature - 25))
+    {
+      setFan(true);
+    }
+  
+    displayTemperature(temp);
+    
 #ifdef ENABLE_SD
-  if (tempLogFile)
-  {
-    tempLogFile.print(millis() / 1000);
-    tempLogFile.print(", ");
-    tempLogFile.println(temp);
-    tempLogFile.flush();
-  }
+    if (tempLogFile)
+    {
+      tempLogFile.print(millis() / 1000);
+      tempLogFile.print(", ");
+      tempLogFile.println(temp);
+      tempLogFile.flush();
+    }
 #endif
-  delay(1000);
+  }
+
+  if (newTemperature != currentTemperature) {
+    displayTemperature(newTemperature);
+    Serial.println(newTemperature, DEC);
+
+    while (millis() - lastInterruptTime < 3000) {
+      if (digitalRead(ENCODER_PUSH_PIN) == LOW)  {
+        currentTemperature = newTemperature;
+        unsigned long currentTime = millis();
+        while (false == interruptTriggered &&
+               (millis() - currentTime < 3000)) {
+          delay(1);
+        }
+        if (interruptTriggered) {
+          return;
+        }
+        break;  
+      }
+      else if (interruptTriggered) {
+        return;
+      }
+
+      delay(1);
+    }
+
+    if (interruptTriggered) {
+      return;
+    }
+
+    if (currentTemperature == newTemperature) {
+      Serial.print("New temp set: ");
+      Serial.println(currentTemperature, DEC);
+    }
+    else {
+      newTemperature = currentTemperature;
+      Serial.print("Temp discarded. current temp: ");
+      Serial.println(currentTemperature, DEC);
+    }
+
+    if (interruptTriggered) {
+      Serial.println("this happened");
+      return;
+    }
+  }
+  
+  if (digitalRead(ENCODER_PUSH_PIN) == LOW)  {
+    displayTemperature(currentTemperature);
+    Serial.print("Current temp: ");
+    Serial.println(currentTemperature, DEC);
+    unsigned long currentTime = millis();
+    while (false == interruptTriggered &&
+           (millis() - currentTime < 3000)) {
+      delay(10);
+    }
+  }
 }
