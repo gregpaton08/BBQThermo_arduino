@@ -13,6 +13,10 @@ static boolean rotating = false;                    // debounce management
 boolean A_set = false;              
 boolean B_set = false;
 
+volatile unsigned long lastInterruptTime;
+
+volatile boolean interruptTriggered = false;
+
 
 void setup() {
 
@@ -30,24 +34,60 @@ void setup() {
   attachInterrupt(1, doEncoderB, CHANGE);
 
   Serial.begin(9600);  // output
+
+  lastInterruptTime = millis();
 }
 
 // main loop, work is done by interrupt service routines, this one only prints stuff
-void loop() { 
+void loop() {
+  interruptTriggered = false;
   rotating = true;  // reset the debouncer
 
   if (newTemperature != currentTemperature) {
     Serial.println(newTemperature, DEC);
-    currentTemperature = newTemperature;
+
+    while (millis() - lastInterruptTime < 3000) {
+      if (digitalRead(clearButton) == LOW)  {
+        currentTemperature = newTemperature;
+        break;  
+      }
+      else if (interruptTriggered) {
+        return;
+      }
+
+      delay(1);
+    }
+
+    if (interruptTriggered) {
+      return;
+    }
+
+    if (currentTemperature == newTemperature) {
+      Serial.print("New temp set: ");
+      Serial.println(currentTemperature, DEC);
+    }
+    else {
+      newTemperature = currentTemperature;
+      Serial.print("Temp discarded. current temp: ");
+      Serial.println(currentTemperature, DEC);
+    }
+
+    if (interruptTriggered) {
+      Serial.println("this happened");
+      return;
+    }
   }
   
   if (digitalRead(clearButton) == LOW)  {
-    newTemperature = 5;
+    Serial.print("Current temp: ");
+    Serial.println(newTemperature, DEC);
   }
 }
 
 // Interrupt on A changing state
 void doEncoderA() {
+  interruptTriggered = true;
+  
   // debounce
   // wait a little until the bouncing is done
   if (rotating) {
@@ -65,11 +105,15 @@ void doEncoderA() {
       }
 
     rotating = false;  // no more debouncing until loop() hits again
+  
+    lastInterruptTime = millis();
   }
 }
 
 // Interrupt on B changing state, same as A above
 void doEncoderB() {
+  interruptTriggered = true;
+  
   if ( rotating ) {
     delay (1);
   }
@@ -84,5 +128,7 @@ void doEncoderB() {
     }
 
     rotating = false;
+  
+    lastInterruptTime = millis();
   }
 }
