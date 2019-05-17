@@ -22,7 +22,7 @@ Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 #endif
 
 #define THERMOMETER_PROBE_PIN 3
-#define FAN_PIN 7
+#define RELAY_FAN_PIN 7
 #define ENCODER_A_PIN 2
 #define ENCODER_B_PIN 3
 #define ENCODER_PUSH_PIN 8
@@ -68,11 +68,11 @@ void setFan(boolean on)
 {
   if (on)
   {
-    digitalWrite(FAN_PIN, LOW);
+    digitalWrite(RELAY_FAN_PIN, LOW);
   }
   else
   {
-    digitalWrite(FAN_PIN, HIGH);
+    digitalWrite(RELAY_FAN_PIN, HIGH);
   }
 }
 
@@ -177,7 +177,7 @@ void setup() {
 
   initSD();
 
-  pinMode(FAN_PIN, OUTPUT);
+  pinMode(RELAY_FAN_PIN, OUTPUT);
 
 
   pinMode(ENCODER_A_PIN, INPUT); 
